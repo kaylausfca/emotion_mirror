@@ -1,0 +1,810 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emotion Mirror</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Bebas+Neue&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0f;
+    --panel: #11111a;
+    --border: #2a2a3a;
+    --accent: #e8ff47;
+    --accent2: #ff4778;
+    --accent3: #47d4ff;
+    --text: #f0f0f0;
+    --muted: #555570;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    overflow-x: hidden;
+  }
+
+  /* Scanline overlay */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.04) 2px,
+      rgba(0,0,0,0.04) 4px
+    );
+    pointer-events: none;
+    z-index: 999;
+  }
+
+  header {
+    width: 100%;
+    max-width: 900px;
+    padding: 2rem 2rem 0;
+    display: flex;
+    align-items: flex-end;
+    gap: 1rem;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 1rem;
+    margin-bottom: 2rem;
+  }
+
+  .logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(2.5rem, 7vw, 4.5rem);
+    letter-spacing: 0.05em;
+    line-height: 1;
+    color: var(--accent);
+    text-shadow: 3px 3px 0 rgba(232,255,71,0.2);
+  }
+
+  .logo span {
+    color: var(--accent2);
+  }
+
+  .tagline {
+    font-size: 0.65rem;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 0.4rem;
+  }
+
+  main {
+    width: 100%;
+    max-width: 900px;
+    padding: 0 1.5rem 3rem;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+  }
+
+  @media (max-width: 620px) {
+    main { grid-template-columns: 1fr; }
+  }
+
+  .camera-panel {
+    position: relative;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    overflow: hidden;
+    aspect-ratio: 4/3;
+  }
+
+  .camera-panel::before {
+    content: 'LIVE';
+    position: absolute;
+    top: 0.75rem;
+    right: 0.75rem;
+    background: var(--accent2);
+    color: #000;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    padding: 0.2rem 0.5rem;
+    z-index: 10;
+    animation: blink 1.2s step-end infinite;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  #webcam-container {
+    width: 100%;
+    height: 100%;
+    position: relative;
+  }
+
+  #webcam-container canvas,
+  #webcam-container video {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: cover;
+    display: block;
+    transform: scaleX(-1);
+  }
+
+  .corner {
+    position: absolute;
+    width: 16px;
+    height: 16px;
+    z-index: 5;
+    pointer-events: none;
+  }
+  .corner-tl { top: 0; left: 0; border-top: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+  .corner-tr { top: 0; right: 0; border-top: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+  .corner-bl { bottom: 0; left: 0; border-bottom: 2px solid var(--accent); border-left: 2px solid var(--accent); }
+  .corner-br { bottom: 0; right: 0; border-bottom: 2px solid var(--accent); border-right: 2px solid var(--accent); }
+
+  .results-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .dominant-emotion {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    padding: 1.25rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .dominant-emotion::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.4s ease;
+  }
+
+  .dominant-emotion.active::after {
+    transform: scaleX(1);
+  }
+
+  .dom-label {
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  .dom-name {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(2rem, 6vw, 3.5rem);
+    letter-spacing: 0.05em;
+    line-height: 1;
+    transition: color 0.3s ease;
+  }
+
+  .dom-pct {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-top: 0.3rem;
+  }
+
+  .dom-emoji {
+    position: absolute;
+    right: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    font-size: 3rem;
+    opacity: 0.25;
+    transition: opacity 0.3s, transform 0.3s;
+  }
+
+  .dominant-emotion:hover .dom-emoji {
+    opacity: 0.6;
+    transform: translateY(-50%) scale(1.15);
+  }
+
+  .bars-panel {
+    border: 1px solid var(--border);
+    background: var(--panel);
+    padding: 1.25rem;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .bars-title {
+    font-size: 0.6rem;
+    letter-spacing: 0.2em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 0.25rem;
+  }
+
+  .bar-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .bar-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .bar-name {
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .bar-pct-text {
+    font-size: 0.7rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 3.5ch;
+    text-align: right;
+  }
+
+  .bar-track {
+    height: 6px;
+    background: rgba(255,255,255,0.05);
+    position: relative;
+    overflow: hidden;
+  }
+
+  .bar-fill {
+    height: 100%;
+    width: 0%;
+    transition: width 0.25s cubic-bezier(0.4,0,0.2,1), background 0.3s ease;
+    position: relative;
+  }
+
+  .bar-fill::after {
+    content: '';
+    position: absolute;
+    right: 0; top: 0; bottom: 0;
+    width: 4px;
+    background: rgba(255,255,255,0.4);
+  }
+
+  /* Start screen */
+  #start-screen {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    gap: 2rem;
+    padding: 2rem;
+    text-align: center;
+  }
+
+  .start-logo {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: clamp(3rem, 10vw, 6rem);
+    color: var(--accent);
+    letter-spacing: 0.05em;
+    line-height: 1;
+    text-shadow: 4px 4px 0 rgba(232,255,71,0.15);
+  }
+
+  .start-logo span { color: var(--accent2); }
+
+  .start-desc {
+    font-size: 0.75rem;
+    color: var(--muted);
+    letter-spacing: 0.12em;
+    max-width: 360px;
+    line-height: 1.8;
+    text-transform: uppercase;
+  }
+
+  #start-btn {
+    background: var(--accent);
+    color: #000;
+    border: none;
+    font-family: 'Space Mono', monospace;
+    font-size: 0.85rem;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 1rem 2.5rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    position: relative;
+  }
+
+  #start-btn::after {
+    content: '';
+    position: absolute;
+    bottom: -4px; right: -4px;
+    width: 100%; height: 100%;
+    border: 1px solid var(--accent);
+    z-index: -1;
+    transition: all 0.15s ease;
+  }
+
+  #start-btn:hover {
+    background: #fff;
+    transform: translate(-2px, -2px);
+  }
+
+  #start-btn:hover::after {
+    transform: translate(4px, 4px);
+  }
+
+  #start-btn:active {
+    transform: translate(0, 0);
+  }
+
+  .loading-msg {
+    font-size: 0.65rem;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+    animation: pulse 1.5s ease infinite;
+    display: none;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  /* Score tracker */
+  .score-panel {
+    grid-column: 1 / -1;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    padding: 1rem 1.25rem;
+    display: flex;
+    gap: 2rem;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+
+  .score-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .score-label {
+    font-size: 0.55rem;
+    color: var(--muted);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+
+  .score-value {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.8rem;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    color: var(--accent);
+  }
+
+  .challenge-box {
+    margin-left: auto;
+    border: 1px solid var(--accent);
+    padding: 0.6rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    min-width: 180px;
+  }
+
+  .challenge-label {
+    font-size: 0.55rem;
+    color: var(--accent);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+  }
+
+  .challenge-name {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.4rem;
+    letter-spacing: 0.05em;
+    line-height: 1;
+  }
+
+  .challenge-progress {
+    height: 3px;
+    background: rgba(255,255,255,0.05);
+    margin-top: 0.3rem;
+  }
+
+  .challenge-bar {
+    height: 100%;
+    background: var(--accent);
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+
+  /* Points system */
+  .points-value {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.4rem;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    color: var(--accent);
+    transition: color 0.2s, text-shadow 0.2s;
+  }
+
+  .points-value.flash {
+    color: #fff;
+    text-shadow: 0 0 20px var(--accent);
+  }
+
+  .high-score-value {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.8rem;
+    letter-spacing: 0.05em;
+    line-height: 1;
+    color: var(--accent3);
+  }
+
+  .point-popup {
+    position: fixed;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.6rem;
+    letter-spacing: 0.1em;
+    color: var(--accent);
+    pointer-events: none;
+    z-index: 9999;
+    text-shadow: 0 0 10px rgba(232,255,71,0.5);
+    animation: floatUp 1.2s ease-out forwards;
+  }
+
+  @keyframes floatUp {
+    0%   { opacity: 1; transform: translateY(0) scale(1); }
+    60%  { opacity: 1; transform: translateY(-55px) scale(1.15); }
+    100% { opacity: 0; transform: translateY(-90px) scale(0.9); }
+  }
+
+  @keyframes challengeFlash {
+    0%   { background: rgba(232,255,71,0.18); }
+    100% { background: var(--panel); }
+  }
+
+  .challenge-complete {
+    animation: challengeFlash 0.7s ease-out;
+  }
+
+  .challenge-reward {
+    font-size: 0.6rem;
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    margin-top: 0.2rem;
+    min-height: 0.85rem;
+  }
+
+  .multiplier-badge {
+    display: inline-block;
+    background: var(--accent2);
+    color: #000;
+    font-size: 0.55rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    padding: 0.15rem 0.45rem;
+    margin-left: 0.4rem;
+    vertical-align: middle;
+    position: relative;
+    top: -0.15rem;
+  }
+</style>
+</head>
+<body>
+
+<!-- Start Screen -->
+<div id="start-screen">
+  <div>
+    <div class="start-logo">EMOTION<br><span>MIRROR</span></div>
+  </div>
+  <p class="start-desc">Real-time facial emotion analysis powered by machine learning. See your feelings in data.</p>
+  <button id="start-btn" onclick="startGame()">Activate Camera</button>
+  <div class="loading-msg" id="loading-msg">Loading model & camera...</div>
+</div>
+
+<header>
+  <div class="logo">EMOTION<span>MIRROR</span></div>
+  <div>
+    <div class="tagline">Real-time facial analysis</div>
+  </div>
+</header>
+
+<main>
+  <!-- Score Row -->
+  <div class="score-panel">
+    <div class="score-item">
+      <div class="score-label">Points</div>
+      <div class="score-value points-value" id="points-display">0</div>
+    </div>
+    <div class="score-item">
+      <div class="score-label">High Score</div>
+      <div class="score-value high-score-value" id="high-score">0</div>
+    </div>
+    <div class="score-item">
+      <div class="score-label">Challenges</div>
+      <div class="score-value" id="challenges-completed" style="color:var(--accent3)">0</div>
+    </div>
+    <div class="challenge-box" id="challenge-box">
+      <div class="challenge-label">Challenge</div>
+      <div class="challenge-name" id="challenge-name">—</div>
+      <div class="challenge-progress"><div class="challenge-bar" id="challenge-bar"></div></div>
+      <div class="challenge-reward" id="challenge-reward"></div>
+    </div>
+  </div>
+
+  <!-- Camera -->
+  <div class="camera-panel">
+    <div class="corner corner-tl"></div>
+    <div class="corner corner-tr"></div>
+    <div class="corner corner-bl"></div>
+    <div class="corner corner-br"></div>
+    <div id="webcam-container"></div>
+  </div>
+
+  <!-- Results -->
+  <div class="results-panel">
+    <div class="dominant-emotion" id="dominant-card">
+      <div class="dom-label">Dominant Emotion</div>
+      <div class="dom-name" id="dom-name">—</div>
+      <div class="dom-pct" id="dom-pct">Waiting for camera...</div>
+      <div class="dom-emoji" id="dom-emoji"></div>
+    </div>
+    <div class="bars-panel">
+      <div class="bars-title">All Readings</div>
+      <div id="bars-container"></div>
+    </div>
+  </div>
+</main>
+
+<script>
+  const MODEL_URL = 'https://teachablemachine.withgoogle.com/models/McjQgNNhg/';
+
+  const EMOTION_COLORS = [
+    '#e8ff47', '#ff4778', '#47d4ff', '#ff9447', '#b447ff',
+    '#47ffb4', '#ff47e8', '#ffcc47', '#47ffff', '#ff7847'
+  ];
+
+  const EMOTION_EMOJIS = {
+    happy: '😄', sad: '😢', angry: '😠', surprised: '😲',
+    fearful: '😨', disgusted: '🤢', neutral: '😐', confused: '😕',
+    excited: '🤩', calm: '😌', default: '🎭'
+  };
+
+  // Points config
+  const POINTS = {
+    CHALLENGE_BASE: 100,
+    CONFIDENCE_BONUS: 0.5,
+    HIGH_CONFIDENCE_THRESHOLD: 80,
+  };
+
+  let model, webcam, labels = [];
+  let frameCount = 0;
+  let challengeEmotion = '';
+  let challengeProgress = 0;
+  let animFrame;
+
+  // Points state
+  let points = 0;
+  let highScore = 0;
+  let challengesCompleted = 0;
+
+  function getEmoji(label) {
+    const l = label.toLowerCase();
+    for (const [key, val] of Object.entries(EMOTION_EMOJIS)) {
+      if (l.includes(key)) return val;
+    }
+    return EMOTION_EMOJIS.default;
+  }
+
+  function getColor(index) {
+    return EMOTION_COLORS[index % EMOTION_COLORS.length];
+  }
+
+  function addPoints(amount, label, sourceEl) {
+    points += amount;
+    if (points > highScore) {
+      highScore = points;
+      document.getElementById('high-score').textContent = highScore;
+    }
+
+    // Update display with flash
+    const el = document.getElementById('points-display');
+    el.textContent = points;
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 300);
+
+    spawnPopup(`+${amount}`, sourceEl);
+  }
+
+  function spawnPopup(text, nearEl) {
+    const popup = document.createElement('div');
+    popup.className = 'point-popup';
+    popup.textContent = text;
+
+    let x = window.innerWidth / 2;
+    let y = window.innerHeight / 2;
+
+    if (nearEl) {
+      const r = nearEl.getBoundingClientRect();
+      x = r.left + r.width / 2;
+      y = r.top;
+    }
+
+    popup.style.left = (x - 40 + (Math.random() * 40 - 20)) + 'px';
+    popup.style.top = (y - 10) + 'px';
+    document.body.appendChild(popup);
+    setTimeout(() => popup.remove(), 1300);
+  }
+
+  function buildBars(labels) {
+    const container = document.getElementById('bars-container');
+    container.innerHTML = '';
+    container.style.display = 'flex';
+    container.style.flexDirection = 'column';
+    container.style.gap = '0.75rem';
+
+    labels.forEach((label, i) => {
+      const row = document.createElement('div');
+      row.className = 'bar-row';
+      row.innerHTML = `
+        <div class="bar-meta">
+          <span class="bar-name">${label}</span>
+          <span class="bar-pct-text" id="pct-${i}">0%</span>
+        </div>
+        <div class="bar-track">
+          <div class="bar-fill" id="bar-${i}" style="background:${getColor(i)}"></div>
+        </div>
+      `;
+      container.appendChild(row);
+    });
+  }
+
+  function pickNewChallenge() {
+    if (labels.length === 0) return;
+    // Avoid same challenge twice in a row
+    let next;
+    do { next = labels[Math.floor(Math.random() * labels.length)]; }
+    while (next === challengeEmotion && labels.length > 1);
+    challengeEmotion = next;
+    challengeProgress = 0;
+    document.getElementById('challenge-name').textContent = challengeEmotion;
+    document.getElementById('challenge-bar').style.width = '0%';
+    document.getElementById('challenge-reward').textContent =
+      `+${POINTS.CHALLENGE_BASE} pts on complete`;
+  }
+
+  async function startGame() {
+    const btn = document.getElementById('start-btn');
+    const loadMsg = document.getElementById('loading-msg');
+    btn.disabled = true;
+    btn.textContent = 'Loading...';
+    loadMsg.style.display = 'block';
+
+    try {
+      const modelURL = MODEL_URL + 'model.json';
+      const metadataURL = MODEL_URL + 'metadata.json';
+
+      model = await tmImage.load(modelURL, metadataURL);
+      labels = model.getClassLabels();
+      buildBars(labels);
+
+      webcam = new tmImage.Webcam(400, 300, true);
+      await webcam.setup();
+      await webcam.play();
+
+      document.getElementById('webcam-container').appendChild(webcam.canvas);
+      document.getElementById('start-screen').style.display = 'none';
+      document.getElementById('dominant-card').classList.add('active');
+
+      pickNewChallenge();
+      loop();
+
+    } catch (err) {
+      console.error(err);
+      btn.disabled = false;
+      btn.textContent = 'Retry';
+      loadMsg.textContent = 'Error loading model. Check console.';
+    }
+  }
+
+  async function loop() {
+    webcam.update();
+    await predict();
+    animFrame = requestAnimationFrame(loop);
+  }
+
+  async function predict() {
+    const predictions = await model.predict(webcam.canvas);
+    predictions.sort((a, b) => b.probability - a.probability);
+
+    const dominant = predictions[0];
+    const pct = Math.round(dominant.probability * 100);
+    const domIdx = labels.indexOf(dominant.className);
+
+    // Dominant card
+    document.getElementById('dom-name').textContent = dominant.className;
+    document.getElementById('dom-name').style.color = getColor(domIdx);
+    document.getElementById('dom-pct').textContent = pct + '% confidence';
+    document.getElementById('dom-emoji').textContent = getEmoji(dominant.className);
+
+    // Bars
+    labels.forEach((label, i) => {
+      const pred = predictions.find(p => p.className === label);
+      const val = pred ? Math.round(pred.probability * 100) : 0;
+      const bar = document.getElementById(`bar-${i}`);
+      const pctEl = document.getElementById(`pct-${i}`);
+      if (bar) bar.style.width = val + '%';
+      if (pctEl) pctEl.textContent = val + '%';
+    });
+
+    frameCount++;
+
+    // High-confidence passive points (every 10 frames above threshold)
+    if (pct >= POINTS.HIGH_CONFIDENCE_THRESHOLD && frameCount % 10 === 0) {
+      const bonus = Math.round((pct - POINTS.HIGH_CONFIDENCE_THRESHOLD) * POINTS.CONFIDENCE_BONUS);
+      if (bonus > 0) addPoints(bonus, dominant.className, document.getElementById('dom-name'));
+    }
+
+    // Challenge progress
+    const challengeBox = document.getElementById('challenge-box');
+    if (challengeEmotion && dominant.className === challengeEmotion && pct >= 50) {
+      challengeProgress = Math.min(100, challengeProgress + 4);
+      document.getElementById('challenge-bar').style.width = challengeProgress + '%';
+
+      if (challengeProgress >= 100) {
+        challengesCompleted++;
+        document.getElementById('challenges-completed').textContent = challengesCompleted;
+        const reward = POINTS.CHALLENGE_BASE + Math.round((pct - 50) * 1.5);
+        addPoints(reward, challengeEmotion, challengeBox);
+
+        // Flash the box
+        challengeBox.classList.remove('challenge-complete');
+        void challengeBox.offsetWidth;
+        challengeBox.classList.add('challenge-complete');
+
+        document.getElementById('challenge-reward').textContent = '✓ Complete!';
+
+        setTimeout(() => {
+          document.getElementById('challenge-reward').textContent = '';
+          pickNewChallenge();
+        }, 900);
+      }
+    } else if (challengeEmotion && dominant.className !== challengeEmotion) {
+      challengeProgress = Math.max(0, challengeProgress - 1);
+      document.getElementById('challenge-bar').style.width = challengeProgress + '%';
+    }
+
+    // Keep reward text updated
+    if (challengeProgress < 100) {
+      const rewardEl = document.getElementById('challenge-reward');
+      if (rewardEl.textContent !== '✓ Complete!') {
+        rewardEl.textContent = `+${POINTS.CHALLENGE_BASE} pts on complete`;
+      }
+    }
+  }
+</script>
+</body>
+</html>
